@@ -1,0 +1,74 @@
+import {test,expect,type Page} from '@playwright/test'
+import {samples} from '../../src/bank'
+const b=(p:Page,title:string)=>p.getByRole('button',{name:title,exact:true})
+async function load(page:Page){
+ const faults:string[]=[];page.on('pageerror',e=>faults.push(e.message));page.on('response',r=>{if(r.status()>=400)faults.push(String(r.status())+' '+r.url())})
+ await page.goto('./');await expect(page.getByRole('heading',{name:'今日の学習'})).toBeVisible();return faults
+}
+async function paste(page:Page,html:string,plain:string){
+ await page.locator('#paste').evaluate((el,[html,plain])=>{
+  const event=new Event('paste',{bubbles:true,cancelable:true}),data=new DataTransfer()
+  data.setData('text/plain',plain);if(html)data.setData('text/html',html)
+  Object.defineProperty(event,'clipboardData',{value:data});el.dispatchEvent(event)
+ },[html,plain])
+}
+async function range(page:Page,a:string,z:string){
+ await page.getByLabel('開始番号').fill(a);await page.getByLabel('終了番号').fill(z);await b(page,'範囲を適用').click()
+ await expect(page.locator('#notice')).toContainText('学習範囲を保存')
+}
+async function snapshot(page:Page){return page.evaluate(async()=>{const db=await new Promise<IDBDatabase>((res,rej)=>{const r=indexedDB.open('leap-robot-notebook');r.onsuccess=()=>res(r.result);r.onerror=rej});return new Promise<any>(res=>{const r=db.transaction('state').objectStore('state').get('book');r.onsuccess=()=>{db.close();res(r.result)}})})}
+test('HTML import → range → ten blind answers → retry → reload → direction-specific record',async({page})=>{
+ const faults=await load(page);await b(page,'単語を取り込む').click()
+ const long=' [名] ①（複数の語義と括弧を含む長い訳）②補足'.repeat(14)
+ const rows=samples.slice(0,12).map((w,i)=>({...w,no:300+i,ja:w.ja+(i===1?long:'')}))
+ const html='<table><tr><th>No</th><th>単語</th><th>意味</th></tr>'+rows.map(w=>`<tr><td>${w.no}</td><td>${w.en}</td><td>${w.ja}</td></tr>`).join('')+'</table>'
+ await paste(page,html,'');await expect(page.locator('#preview')).toContainText('12 語')
+ await b(page,'確認して保存').click();await range(page,'301','310')
+ await page.getByRole('button',{name:/範囲テスト.*最後/}).click();await page.getByLabel('問題形式').selectOption('type');await b(page,'テストを始める').click()
+ for(let i=0;i<10;i++){
+  const no=Number((await page.locator('.question small').innerText()).match(/\d+/)![0]);expect(no).toBeGreaterThanOrEqual(301);expect(no).toBeLessThanOrEqual(310)
+  await page.getByLabel('自分の解答').fill(i===0?'misspelt':rows.find(w=>w.no===no)!.en)
+  await b(page,'回答を提出').click();await expect(page.getByText('回答を保存しました。')).toBeVisible()
+  await expect(page.locator('.feedback')).toHaveCount(0)
+  if(i===0){await page.reload();await expect(page.getByText('回答を保存しました。')).toBeVisible();expect((await snapshot(page)).session.answers).toHaveLength(1)}
+  await b(page,i===9?'採点する':'次の問題へ').click()
+ }
+ await expect(page.getByRole('heading',{name:'範囲テストの結果'})).toBeVisible();await expect(page.locator('details[open]')).toContainText('misspelt')
+ expect((await snapshot(page)).data.history).toHaveLength(10)
+ await b(page,'間違えた語を解き直す').click();await expect(page.locator('#response')).toBeVisible()
+ const no=Number((await page.locator('.question small').innerText()).match(/\d+/)![0]);await page.getByLabel('自分の解答').fill(rows.find(w=>w.no===no)!.en)
+ await b(page,'回答する').click();await b(page,'結果を見る').click();await b(page,'学習記録へ').click();await page.reload()
+ await expect(page.locator('.metrics>div').nth(1)).toContainText('11 回');await expect(page.locator('.metrics>div').first()).toContainText('0 回')
+ const d=(await snapshot(page)).data;expect(d.words.personal[1].ja).toBe(rows[1].ja)
+ await page.getByRole('link',{name:'単語帳',exact:true}).click();await expect(page.locator('.entry')).toHaveCount(10)
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();expect(faults).toEqual([])
+})
+test('sample, revealing and rapid rating, immediate reload, archive restore and damaged backup',async({page})=>{
+ await load(page);await b(page,'サンプルで試す').click();await b(page,'復習を始める').click();await b(page,'答えを開く').click()
+ expect((await snapshot(page)).data.history).toHaveLength(0)
+ await b(page,'思い出せた').evaluate((el:HTMLButtonElement)=>{el.click();el.click()})
+ await expect(page.locator('.feedback')).toContainText('自力正解');await page.reload();await expect(page.locator('.feedback')).toBeVisible()
+ expect((await snapshot(page)).data.history).toHaveLength(1)
+ await page.getByRole('link',{name:'設定'}).click()
+ const download=page.waitForEvent('download');await b(page,'書き出す').click();const file=await (await download).path();expect(file).toBeTruthy()
+ await page.locator('#restore').setInputFiles({name:'bad.json',mimeType:'application/json',buffer:Buffer.from('{"version":1}')});await expect(page.locator('#notice')).toContainText('復元できません')
+ expect((await snapshot(page)).data.history).toHaveLength(1)
+ await page.locator('#restore').setInputFiles(file!);await b(page,'この内容で復元する').click();await expect(page.getByRole('heading',{name:'今日の学習'})).toBeVisible()
+ expect((await snapshot(page)).data.history).toHaveLength(1)
+})
+test('TSV paste, conflicting re-import, individual gloss toggle, filters, cloze vowel form and hint',async({page})=>{
+ await load(page);await b(page,'単語を取り込む').click()
+ const tsv='No\t単語\t意味\n301\tlend\t[他] ①（友に）貸す\n302\tunlisted\t[形] 未掲載の'
+ await paste(page,'',tsv);await b(page,'確認して保存').click()
+ await page.getByRole('link',{name:'設定'}).click();await b(page,'単語を取り込む').click()
+ await paste(page,'',tsv+'\n301\tother\t別');await expect(b(page,'確認して保存')).toBeDisabled();await expect(page.locator('.error')).toContainText('301')
+ await paste(page,'',tsv);await expect(page.locator('#preview')).toContainText('登録済み 2');await b(page,'確認して保存').click()
+ await page.getByRole('link',{name:'単語帳',exact:true}).click();await page.getByLabel('訳を一括で隠す').check();await expect(page.locator('.entry .gloss')).toHaveCount(0)
+ await b(page,'訳を開く').first().click();await expect(page.locator('.entry .gloss')).toHaveCount(1)
+ await page.getByLabel('英語・日本語を検索').fill('貸');await b(page,'この絞り込みで練習').click()
+ await page.getByLabel('問題形式').selectOption('cloze');await expect(page.locator('main')).toContainText('対応 1 語')
+ await b(page,'練習を始める').click();await expect(page.locator('.question')).toContainText('過去形');await b(page,'ヒントを見る').click()
+ await page.setViewportSize({width:320,height:430});await page.getByLabel('自分の解答').fill(' LENT ')
+ await b(page,'回答する').click();await expect(page.locator('.feedback')).toContainText('ヒント正解')
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy()
+})
