@@ -26,7 +26,8 @@ function render(){
  if(page==='study'&&!snap.session)page='home'
  const active=!!snap.session&&snap.session.phase!=='done'
  const body=page==='home'?v.home(d,active):page==='book'?v.book(d,f):page==='practice'?v.practice(d,setup,pool(),active):page==='records'?v.records(d):page==='settings'?v.settings(d):page==='import'?v.importer(parsed,raw):study(snap.session!)
- root.innerHTML=v.header(page)+'<main id="main">'+body+'</main><footer><b>単語手帖</b><span>改訂版 LEAP 学習帳</span></footer>'
+ const exit=page==='study'&&active?'<div class="session-exit">'+btn('今回の学習を終了','end','text')+'</div>':''
+ root.innerHTML=v.header(page)+'<main id="main">'+body+exit+'</main><footer><b>単語手帖</b><span>改訂版 LEAP 学習帳</span></footer>'
  if(page==='settings'&&backup)element('restore-preview').innerHTML=`<p>個人 ${backup.words.personal.length} 語・サンプル ${backup.words.sample.length} 語・回答 ${backup.history.length} 回。現在のデータをこの内容に置き換えます。</p>${btn('この内容で復元する','restoreok')} ${btn('キャンセル','cancelrestore','text')}`
 }
 async function save(change:(next:Snapshot)=>void,after?:()=>void){

@@ -8,7 +8,7 @@ permissions:
   contents: read
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
@@ -26,3 +26,45 @@ jobs:
           name: pages
           path: dist/
           include-hidden-files: true
+  publish:
+    needs: verify
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pages: write
+    concurrency: publish-study-notebook
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: pages
+          path: site
+      - name: Publish verified assets to gh-pages
+        working-directory: site
+        env:
+          GIT_INDEX_FILE: ${{ runner.temp }}/pages-index
+        run: |
+          export GIT_DIR="$(git rev-parse --absolute-git-dir)"
+          export GIT_WORK_TREE="$PWD"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git read-tree --empty
+          git add --all -- .
+          parent=()
+          if git show-ref --verify --quiet refs/remotes/origin/gh-pages; then
+            parent=(-p "$(git rev-parse refs/remotes/origin/gh-pages)")
+          fi
+          commit=$(git commit-tree "$(git write-tree)" "${parent[@]}" -m "Publish verified notebook from ${GITHUB_SHA}")
+          git push origin "${commit}:refs/heads/gh-pages"
+      - name: Request branch-based Pages build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/pages" --silent; then
+            gh api --method POST "repos/$GITHUB_REPOSITORY/pages/builds" --silent
+          else
+            echo "::notice::Select Deploy from a branch, gh-pages, /(root) in Settings → Pages."
+          fi
