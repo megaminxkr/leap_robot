@@ -26,6 +26,7 @@ test('HTML import → range → ten blind answers → retry → reload → direc
  await b(page,'確認して保存').click();await range(page,'301','310')
  await page.getByRole('button',{name:/範囲テスト.*最後/}).click();await page.getByLabel('問題形式').selectOption('type');await b(page,'テストを始める').click()
  for(let i=0;i<10;i++){
+  await expect(page.locator('#response')).toBeVisible()
   const no=Number((await page.locator('.question small').innerText()).match(/\d+/)![0]);expect(no).toBeGreaterThanOrEqual(301);expect(no).toBeLessThanOrEqual(310)
   await page.getByLabel('自分の解答').fill(i===0?'misspelt':rows.find(w=>w.no===no)!.en)
   await b(page,'回答を提出').click();await expect(page.getByText('回答を保存しました。')).toBeVisible()
@@ -46,8 +47,8 @@ test('HTML import → range → ten blind answers → retry → reload → direc
 test('sample, revealing and rapid rating, immediate reload, archive restore and damaged backup',async({page})=>{
  await load(page);await b(page,'サンプルで試す').click();await b(page,'復習を始める').click();await b(page,'答えを開く').click()
  expect((await snapshot(page)).data.history).toHaveLength(0)
- await b(page,'思い出せた').evaluate((el:HTMLButtonElement)=>{el.click();el.click()})
- await expect(page.locator('.feedback')).toContainText('自力正解');await page.reload();await expect(page.locator('.feedback')).toBeVisible()
+ await b(page,'思い出せた').evaluate((el:HTMLButtonElement)=>{el.click();el.click();location.reload()})
+ await expect(page.locator('.feedback')).toContainText('自力正解')
  expect((await snapshot(page)).data.history).toHaveLength(1)
  await page.getByRole('link',{name:'設定'}).click()
  const download=page.waitForEvent('download');await b(page,'書き出す').click();const file=await (await download).path();expect(file).toBeTruthy()
@@ -68,6 +69,7 @@ test('TSV paste, conflicting re-import, individual gloss toggle, filters, cloze 
  await page.getByLabel('英語・日本語を検索').fill('貸');await b(page,'この絞り込みで練習').click()
  await page.getByLabel('問題形式').selectOption('cloze');await expect(page.locator('main')).toContainText('対応 1 語')
  await b(page,'練習を始める').click();await expect(page.locator('.question')).toContainText('過去形');await b(page,'ヒントを見る').click()
+ await expect(page.locator('.hint')).toBeVisible()
  await page.setViewportSize({width:320,height:430});await page.getByLabel('自分の解答').fill(' LENT ')
  await b(page,'回答する').click();await expect(page.locator('.feedback')).toContainText('ヒント正解')
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy()

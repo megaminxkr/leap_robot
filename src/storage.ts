@@ -1,5 +1,5 @@
 import {empty} from './core.ts'
-import type {Data,Snapshot} from './types.ts'
+import type {Data,Snapshot,Session,Attempt} from './types.ts'
 const obj=(v:unknown):v is Record<string,unknown>=>v!==null&&typeof v==='object'&&!Array.isArray(v)
 const int=(v:unknown,a:number,b:number):v is number=>typeof v==='number'&&Number.isInteger(v)&&v>=a&&v<=b
 const nonempty=(v:unknown):v is string=>typeof v==='string'&&v.trim().length>0
@@ -25,13 +25,31 @@ export function validData(v:unknown):v is Data{
  return true
 }
 let db:IDBDatabase
+// Keep a small, tab-local intent until IndexedDB confirms the answer.
+// A reload may otherwise abort a transaction between its read and write.
+const journalKey='leap-robot-pending-v1'
+export function prepareAnswer(revision:number,session:Session,added:Attempt[]){
+ sessionStorage.setItem(journalKey,JSON.stringify({revision,session,added}))
+}
+export function clearJournal(){sessionStorage.removeItem(journalKey)}
+async function recover():Promise<Snapshot>{
+ const state=await readStore(),raw=sessionStorage.getItem(journalKey)
+ if(!raw)return state
+ let pending
+ try{pending=JSON.parse(raw)}catch{clearJournal();return state}
+ if(pending?.revision===state.revision && state.session?.id===pending.session?.id && Array.isArray(pending.added)){
+  const next:Snapshot={...state,session:pending.session,data:{...state.data,history:[...state.data.history,...pending.added]}}
+  if(validData(next.data)){try{await commit(next);clearJournal();return next}catch{const fresh=await readStore();if(fresh.revision===state.revision)throw new Error('回答を復元できません。');clearJournal();return fresh}}
+ }
+ clearJournal();return state
+}
 export async function openStore():Promise<Snapshot>{
  db=await new Promise<IDBDatabase>((resolve,reject)=>{
   const r=indexedDB.open('leap-robot-notebook',1)
   r.onupgradeneeded=()=>r.result.createObjectStore('state')
   r.onerror=()=>reject(r.error);r.onsuccess=()=>resolve(r.result)
  })
- return readStore()
+ return recover()
 }
 export function readStore():Promise<Snapshot>{
  return new Promise((resolve,reject)=>{

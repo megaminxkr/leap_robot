@@ -3,7 +3,7 @@ import {samples} from './bank.ts'
 import {localDay,draw,question,progress,reviewPlan} from './core.ts'
 import {htmlRows,tsv,preview,mergeWords} from './importer.ts'
 import type {Preview} from './importer.ts'
-import {openStore,readStore,commit,validData,validIntervals} from './storage.ts'
+import {openStore,readStore,commit,validData,validIntervals,prepareAnswer,clearJournal} from './storage.ts'
 import * as v from './views.ts'
 import {answer,advance,mark,study} from './study.ts'
 import {btn,esc} from './ui.ts'
@@ -32,10 +32,15 @@ function render(){
 }
 async function save(change:(next:Snapshot)=>void,after?:()=>void){
  if(busy)return
- busy=true
- try{const next=structuredClone(snap);change(next);await commit(next);snap=next;render();after?.()}
- catch(e){try{snap=await readStore();render()}catch{}say(e instanceof Error?e.message:'保存できませんでした。')}
- finally{busy=false}
+ busy=true;root.inert=true;root.setAttribute('aria-busy','true')
+ try{
+  const next=structuredClone(snap);change(next)
+  const journal=page==='study' && next.session && next.session.id===snap.session?.id
+  if(journal)prepareAnswer(snap.revision,next.session!,next.data.history.slice(snap.data.history.length))
+  await commit(next);snap=next;if(journal)clearJournal();render();after?.()
+ }
+ catch(e){try{snap=await readStore();clearJournal();render()}catch{}say(e instanceof Error?e.message:'保存できませんでした。')}
+ finally{busy=false;root.inert=false;root.removeAttribute('aria-busy')}
 }
 function buildSession(d:Data,mode:Mode,queue:Question[]){return {id:crypto.randomUUID(),deck:d.deck,mode,queue,index:0,answers:[],revealed:false,hinted:false,phase:'ask' as const,markIndex:0}}
 function launch(mode:Mode,queue:Question[]){
@@ -55,7 +60,9 @@ async function act(action:string,el?:HTMLElement){
  if(action==='preview'){try{parsed=preview(tsv(raw),d.words.personal)}catch(e){parsed=null;say(String(e))}render();return}
  if(action==='saveimport'&&parsed?.words.length&&!parsed.errors.length){
   if(s&&s.phase!=='done'&&s.deck==='sample'){say('サンプルの学習を終了してから保存してください。');return}
-  const list=parsed.words
+  const check=preview(parsed.words.map(w=>[String(w.no),w.en,w.ja]),d.words.personal)
+  if(check.errors.length){parsed=check;render();return}
+  const list=check.words
   await save(n=>{n.data.words.personal=mergeWords(n.data.words.personal,list);n.data.deck='personal'},()=>{parsed=null;raw='';go('home');say('単語を保存しました。')});return
  }
  if(action==='allrange'){await save(n=>{n.data.settings.from=1;n.data.settings.to=2300;f.page=0});return}
